@@ -7,6 +7,7 @@ def main():
         print(f"Connection from {addr}")
         request = conn.recv(4096).decode("utf-8")
         print(f"Received request: {request}")
+        print("Sending response...")
         response = "HTTP/1.1 200 OK\r\n\r\n"
         conn.sendall(response.encode("utf-8"))
         conn.close()
