@@ -1,4 +1,5 @@
-import socket  # noqa: F401
+import socket
+import threading
 
 def handle_echo(path: str) -> str:
     message = path[len("/echo/"):]
@@ -24,41 +25,52 @@ def extract_headers_from_request(request: str) -> dict[str, str]:
 def extract_body_from_request(request: str) -> str:
     return request.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in request else ""
 
+def handle_client(conn: socket.socket, addr) -> None:
+      # wait for client
+    print(f"Connection from {addr}")
+    try:
+        while True:
+            request = conn.recv(4096)
+            if not request:
+                break
+            request = request.decode("utf-8")
+            print(f"Received request: {request}")
+
+            method, path, protocol = extract_request_info_from_request(request)
+            headers = extract_headers_from_request(request)
+            body = extract_body_from_request(request)
+            print(
+                "\n".join(
+                    [
+                        f"Requested method: {method}",
+                        f"Requested path: {path}",
+                        f"Requested protocol: {protocol}",
+                        f"Requested headers: {headers}",
+                        f"Requested body: {body}",
+                    ]
+                )
+            )
+
+            if path.startswith("/echo/"):
+                response = handle_echo(path)
+            elif path == "/user-agent":
+                user_agent_header = headers.get("User-Agent", "Unknown")
+                response = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(user_agent_header)}\r\n\r\n{user_agent_header}"
+            elif path == "/":
+                response = "HTTP/1.1 200 OK\r\n\r\n"
+            else:
+                response = "HTTP/1.1 404 Not Found\r\n\r\n"
+
+            conn.sendall(response.encode("utf-8"))
+    finally:
+        conn.close()
+
 def main():
     with socket.create_server(("localhost", 4221), reuse_port=True) as server_socket:
-        conn, addr = server_socket.accept()  # wait for client
-        print(f"Connection from {addr}")
-
-        request = conn.recv(4096).decode("utf-8")
-        print(f"Received request: {request}")
-
-        method, path, protocol = extract_request_info_from_request(request)
-        headers = extract_headers_from_request(request)
-        body = extract_body_from_request(request)
-        print(
-            "\n".join(
-                [
-                    f"Requested method: {method}",
-                    f"Requested path: {path}",
-                    f"Requested protocol: {protocol}",
-                    f"Requested headers: {headers}",
-                    f"Requested body: {body}",
-                ]
-            )
-        )
-
-        if path.startswith("/echo/"):
-            response = handle_echo(path)
-        elif path == "/user-agent":
-            user_agent_header = headers.get("User-Agent", "Unknown")
-            response = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(user_agent_header)}\r\n\r\n{user_agent_header}"
-        elif path == "/":
-            response = "HTTP/1.1 200 OK\r\n\r\n"
-        else:
-            response = "HTTP/1.1 404 Not Found\r\n\r\n"
-
-        conn.sendall(response.encode("utf-8"))
-        conn.close()
+        while True:
+            conn, addr = server_socket.accept()
+            thread = threading.Thread(target=handle_client, args=(conn, addr))
+            thread.start()
 
 
 if __name__ == "__main__":
