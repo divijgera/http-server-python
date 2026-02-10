@@ -1,5 +1,6 @@
 import socket
 import threading
+import argparse
 
 def handle_echo(path: str) -> str:
     message = path[len("/echo/"):]
@@ -25,7 +26,17 @@ def extract_headers_from_request(request: str) -> dict[str, str]:
 def extract_body_from_request(request: str) -> str:
     return request.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in request else ""
 
-def handle_client(conn: socket.socket, addr) -> None:
+def handle_files(path: str, directory: str) -> str:
+    filename = path[len("/files/"):]
+    full_path = f"{directory}/{filename}"
+    try:
+        with open(full_path, "r") as f:
+            content = f.read()
+        return f"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {len(content)}\r\n\r\n{content}"
+    except FileNotFoundError:
+        return "HTTP/1.1 404 Not Found\r\n\r\n"
+
+def handle_client(conn: socket.socket, addr, directory: str) -> None:
       # wait for client
     print(f"Connection from {addr}")
     try:
@@ -56,6 +67,8 @@ def handle_client(conn: socket.socket, addr) -> None:
             elif path == "/user-agent":
                 user_agent_header = headers.get("User-Agent", "Unknown")
                 response = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(user_agent_header)}\r\n\r\n{user_agent_header}"
+            elif path.startswith("/files/"):
+                response = handle_files(path, directory)
             elif path == "/":
                 response = "HTTP/1.1 200 OK\r\n\r\n"
             else:
@@ -65,13 +78,15 @@ def handle_client(conn: socket.socket, addr) -> None:
     finally:
         conn.close()
 
-def main():
+def main(directory: str) -> None:
     with socket.create_server(("localhost", 4221), reuse_port=True) as server_socket:
         while True:
             conn, addr = server_socket.accept()
-            thread = threading.Thread(target=handle_client, args=(conn, addr))
+            thread = threading.Thread(target=handle_client, args=(conn, addr, directory), daemon=True)
             thread.start()
 
-
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="A simple HTTP server.")
+    parser.add_argument("--directory", type=str, default=".", help="The directory to serve files from.")
+    args = parser.parse_args()
+    main(args.directory)
