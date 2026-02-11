@@ -1,6 +1,21 @@
 import socket
 import threading
 import argparse
+from dataclasses import dataclass
+
+@dataclass
+class HTTPRequest:
+    method: str
+    path: str
+    protocol: str
+    headers: dict[str, str]
+    body: str
+
+def extract_http_request_from_request(request: str) -> HTTPRequest:
+    method, path, protocol = extract_request_info_from_request(request)
+    headers = extract_headers_from_request(request)
+    body = extract_body_from_request(request)
+    return HTTPRequest(method, path, protocol, headers, body)
 
 def handle_echo(path: str) -> str:
     message = path[len("/echo/"):]
@@ -26,7 +41,7 @@ def extract_headers_from_request(request: str) -> dict[str, str]:
 def extract_body_from_request(request: str) -> str:
     return request.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in request else ""
 
-def handle_files(path: str, directory: str) -> str:
+def handle_get_files(path: str, directory: str) -> str:
     filename = path[len("/files/"):]
     full_path = f"{directory}/{filename}"
     try:
@@ -35,6 +50,19 @@ def handle_files(path: str, directory: str) -> str:
         return f"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {len(content)}\r\n\r\n{content}"
     except FileNotFoundError:
         return "HTTP/1.1 404 Not Found\r\n\r\n"
+    
+def handle_post_files(http_request: HTTPRequest, directory: str) -> str:
+    filename = http_request.path[len("/files/"):]
+    full_path = f"{directory}/{filename}"
+    with open(full_path, "w") as f:
+        f.write(http_request.body)
+    return "HTTP/1.1 201 Created\r\n\r\n"
+
+def handle_files(http_request: HTTPRequest, directory: str) -> str:
+    if http_request.method == "GET":
+        return handle_get_files(http_request.path, directory)
+    else:
+        return handle_post_files(http_request, directory)
 
 def handle_client(conn: socket.socket, addr, directory: str) -> None:
       # wait for client
@@ -47,29 +75,27 @@ def handle_client(conn: socket.socket, addr, directory: str) -> None:
             request = request.decode("utf-8")
             print(f"Received request: {request}")
 
-            method, path, protocol = extract_request_info_from_request(request)
-            headers = extract_headers_from_request(request)
-            body = extract_body_from_request(request)
+            http_request = extract_http_request_from_request(request)
             print(
                 "\n".join(
                     [
-                        f"Requested method: {method}",
-                        f"Requested path: {path}",
-                        f"Requested protocol: {protocol}",
-                        f"Requested headers: {headers}",
-                        f"Requested body: {body}",
+                        f"Requested method: {http_request.method}",
+                        f"Requested path: {http_request.path}",
+                        f"Requested protocol: {http_request.protocol}",
+                        f"Requested headers: {http_request.headers}",
+                        f"Requested body: {http_request.body}",
                     ]
                 )
             )
 
-            if path.startswith("/echo/"):
-                response = handle_echo(path)
-            elif path == "/user-agent":
-                user_agent_header = headers.get("User-Agent", "Unknown")
+            if http_request.path.startswith("/echo/"):
+                response = handle_echo(http_request.path)
+            elif http_request.path == "/user-agent":
+                user_agent_header = http_request.headers.get("User-Agent", "Unknown")
                 response = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(user_agent_header)}\r\n\r\n{user_agent_header}"
-            elif path.startswith("/files/"):
-                response = handle_files(path, directory)
-            elif path == "/":
+            elif http_request.path.startswith("/files/"):
+                response = handle_files(http_request, directory)
+            elif http_request.path == "/":
                 response = "HTTP/1.1 200 OK\r\n\r\n"
             else:
                 response = "HTTP/1.1 404 Not Found\r\n\r\n"
