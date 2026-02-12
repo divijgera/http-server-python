@@ -11,15 +11,65 @@ class HTTPRequest:
     headers: dict[str, str]
     body: str
 
+@dataclass
+class HTTPResponse:
+    status_code: int
+    protocol: str
+    headers: dict[str, str]
+    body: str
+    message: str
+
+    def build_response(self, close_reponse: bool = False) -> str:
+        response = f"{self.protocol} {self.status_code} {self.message}\r\n"
+
+        if self.headers:
+            for key, value in self.headers.items():
+                response += f"{key}: {value}\r\n"
+
+        if close_reponse:
+            response += "Connection: close\r\n"
+
+        response += "\r\n"
+
+        if self.body:
+            response += self.body
+
+        return response
+
 def extract_http_request_from_request(request: str) -> HTTPRequest:
     method, path, protocol = extract_request_info_from_request(request)
     headers = extract_headers_from_request(request)
     body = extract_body_from_request(request)
     return HTTPRequest(method, path, protocol, headers, body)
 
-def handle_echo(path: str) -> str:
+
+def make_response(
+    *,
+    status_code: int,
+    message: str,
+    headers: dict[str, str] | None = None,
+    body: str = "",
+    protocol: str = "HTTP/1.1",
+) -> HTTPResponse:
+    return HTTPResponse(
+        status_code=status_code,
+        protocol=protocol,
+        headers=headers or {},
+        body=body,
+        message=message,
+    )
+
+def handle_echo(path: str) -> HTTPResponse:
     message = path[len("/echo/"):]
-    return f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(message)}\r\n\r\n{message}"
+    return make_response(
+        status_code=200,
+        message="OK",
+        headers={
+            "Content-Type": "text/plain",
+            "Content-Length": str(len(message)),
+        },
+        body=message,
+    )
 
 def extract_request_info_from_request(request: str) -> tuple[str, str, str]:
     request_info = request.split("\r\n")[0].split(" ")
@@ -41,31 +91,40 @@ def extract_headers_from_request(request: str) -> dict[str, str]:
 def extract_body_from_request(request: str) -> str:
     return request.split("\r\n\r\n", 1)[1] if "\r\n\r\n" in request else ""
 
-def handle_get_files(path: str, directory: str) -> str:
+def handle_get_files(path: str, directory: str) -> HTTPResponse:
     filename = path[len("/files/"):]
     full_path = f"{directory}/{filename}"
     try:
         with open(full_path, "r") as f:
             content = f.read()
-        return f"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {len(content)}\r\n\r\n{content}"
+        return make_response(
+            status_code=200,
+            message="OK",
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Length": str(len(content)),
+            },
+            body=content,
+        )
     except FileNotFoundError:
-        return "HTTP/1.1 404 Not Found\r\n\r\n"
+        return make_response(status_code=404, message="Not Found")
     
-def handle_post_files(http_request: HTTPRequest, directory: str) -> str:
+def handle_post_files(http_request: HTTPRequest, directory: str) -> HTTPResponse:
     filename = http_request.path[len("/files/"):]
     full_path = f"{directory}/{filename}"
     with open(full_path, "w") as f:
         f.write(http_request.body)
-    return "HTTP/1.1 201 Created\r\n\r\n"
 
-def handle_files(http_request: HTTPRequest, directory: str) -> str:
+    return make_response(status_code=201, message="Created")
+
+def handle_files(http_request: HTTPRequest, directory: str) -> HTTPResponse:
     if http_request.method == "GET":
         return handle_get_files(http_request.path, directory)
     else:
         return handle_post_files(http_request, directory)
 
 def handle_client(conn: socket.socket, addr, directory: str) -> None:
-      # wait for client
+    # wait for client
     print(f"Connection from {addr}")
     try:
         while True:
@@ -88,19 +147,32 @@ def handle_client(conn: socket.socket, addr, directory: str) -> None:
                 )
             )
 
+            close_connection = http_request.headers.get("Connection", "").lower() == "close"
+
             if http_request.path.startswith("/echo/"):
                 response = handle_echo(http_request.path)
             elif http_request.path == "/user-agent":
                 user_agent_header = http_request.headers.get("User-Agent", "Unknown")
-                response = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {len(user_agent_header)}\r\n\r\n{user_agent_header}"
+                response = make_response(
+                    status_code=200,
+                    message="OK",
+                    headers={
+                        "Content-Type": "text/plain",
+                        "Content-Length": str(len(user_agent_header)),
+                    },
+                    body=user_agent_header,
+                )
             elif http_request.path.startswith("/files/"):
                 response = handle_files(http_request, directory)
             elif http_request.path == "/":
-                response = "HTTP/1.1 200 OK\r\n\r\n"
+                response = make_response(status_code=200, message="OK")
             else:
-                response = "HTTP/1.1 404 Not Found\r\n\r\n"
+                response = make_response(status_code=404, message="Not Found")
 
-            conn.sendall(response.encode("utf-8"))
+            conn.sendall(response.build_response(close_connection).encode("utf-8"))
+
+            if close_connection:
+                break
     finally:
         conn.close()
 
