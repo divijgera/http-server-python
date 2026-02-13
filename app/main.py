@@ -2,7 +2,8 @@ import socket
 import threading
 import argparse
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
+import gzip
 
 SERVER_ACCEPTED_ENCODINGS = ["gzip"]
 
@@ -19,30 +20,48 @@ class HTTPResponse:
     status_code: int
     protocol: str
     headers: dict[str, str]
-    body: str
+    body: Union[str, bytes]
     message: str
 
-    def handle_compression(self, compression_method: str) -> str:
-        return self.body
+    def handle_compression(self, compression_method: str, body_bytes: bytes) -> bytes:
+        if compression_method == "gzip":
+            return gzip.compress(body_bytes)
+        return body_bytes
 
-    def build_response(self) -> str:
+    def build_response(self) -> bytes:
         response = f"{self.protocol} {self.status_code} {self.message}\r\n"
 
         compression_method = None
 
         if self.headers and "Content-Encoding" in self.headers:
             compression_method = self.headers["Content-Encoding"]
+        
+        body_bytes = b""
+        if self.body:
+            if isinstance(self.body, (bytes, bytearray)):
+                body_bytes = bytes(self.body)
+            else:
+                body_bytes = self.body.encode("utf-8")
+
+        if body_bytes and compression_method:
+            body_bytes = self.handle_compression(
+                compression_method=compression_method,
+                body_bytes=body_bytes,
+            )
+            self.headers["Content-Length"] = str(len(body_bytes))
 
         if self.headers:
             for key, value in self.headers.items():
                 response += f"{key}: {value}\r\n"
 
         response += "\r\n"
+        
+        response_bytes = response.encode("utf-8")
 
-        if self.body:
-            response += self.handle_compression(self.body) if compression_method else self.body
+        if body_bytes:
+            response_bytes += body_bytes
 
-        return response
+        return response_bytes
     
 def generate_response_headers(
         request_headers: Optional[dict[str, str]] = None,
@@ -82,7 +101,7 @@ def make_response(
     status_code: int,
     message: str,
     headers: Optional[dict[str, str]] = None,
-    body: str = "",
+    body: Union[str, bytes] = "",
     protocol: str = "HTTP/1.1",
 ) -> HTTPResponse:
     return HTTPResponse(
@@ -218,7 +237,7 @@ def handle_client(conn: socket.socket, addr, directory: str) -> None:
             else:
                 response = make_response(status_code=404, message="Not Found",headers=generate_response_headers(request_headers=http_request.headers))
 
-            conn.sendall(response.build_response().encode("utf-8"))
+            conn.sendall(response.build_response())
 
             if close_connection:
                 break
